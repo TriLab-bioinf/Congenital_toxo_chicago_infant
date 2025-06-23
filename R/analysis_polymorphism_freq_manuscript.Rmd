@@ -1,0 +1,102 @@
+---
+title: "Analysis of polymerphisms in TgHsUS2"
+output: html_notebook
+---
+
+```{r}
+pacman::p_load(tidyverse, karyoploteR, GenomicRanges,Biostrings,rtracklayer )
+```
+
+**For ME49 as reference:**
+
+# Read "ALL_SAMPLES_vs_RIMA.summary.sorted.txt" (GSC subset)
+```{r}
+# Load paper strains ids
+gsc_strains <- read_table(file = "../strains_paper.txt", col_names = F)
+
+all_samples <- read.delim(file = "../../paper_strains.txt", header = T, row.names = NULL)
+all_samples <- select(all_samples, - c("CHROMOSOME","POS")) # remove first 2 columns
+
+# Compare each strain with reference ("ME49") and add a 0 or 1 if they match the reference allele or not.
+all_samples.freq <- apply(all_samples,2,function(x) 1 * (x != all_samples[,"ME49"] ) )
+
+all_samples.freqs.list <- apply(all_samples.freq,2, function(x){
+  tf <- table(x > 0.5)
+  total <- length(x)
+  freq <- round(tf[2] / total, digits = 3)
+})
+
+# Remove reference ME49 from the freq analysis
+all_samples.freqs.list <- all_samples.freqs.list[!names(all_samples.freqs.list) == "ME49"]
+
+
+# Load TgHsUS2 data
+TgHsUS2_vcf <- read_table(file = "../../toxo.sorted.dedup.bcf_selected.txt", col_names = F)
+
+# calculate frequences
+tghsus2.matches <-  as.vector(table(TgHsUS2_vcf$X4 == TgHsUS2_vcf$X5))[2]
+tghsus2.mismatches <- as.vector(table(TgHsUS2_vcf$X4 == TgHsUS2_vcf$X5))[1]
+tghsus2_ratio <- tghsus2.mismatches / (tghsus2.mismatches + tghsus2.matches)
+
+
+  pdf("../../Proportion_of_alleles_per_strain_ME49REF.pdf", width = 8, height = 8)
+  hist(all_samples.freqs.list, 
+       breaks = 20, 
+       xlim = c(0,0.3), 
+       xlab = "Proportion of alternative alleles identified per strain", ylab = "Number of strains",
+       main = NULL); 
+  abline(v=tghsus2_ratio, col="red" )
+  dev.off()
+
+population_values <- all_samples.freqs.list[ !(all_samples.freqs.list == 0 | is.na(all_samples.freqs.list))]
+```
+
+
+---------------------------------------
+title: "Genomic distribution of SNPs"
+---------------------------------------
+
+### Plot intergenic transcripts dispersion across chromsomes
+```{r}
+tgrt1.df <- read_tsv(file = "../../genome_table_ME49.txt", col_names = c("chr","length")) %>% mutate(start=1) %>% head(14)
+tgrt1.gr <- makeGRangesFromDataFrame(df = tgrt1.df, seqnames.field = "chr", end.field = "length", start.field = "start")
+
+# Load tghsus2 SNP data
+bcf_colnames <- c("CHROM",  "POS",     "ID",      "REF",     "ALT",     "QUAL",    "FILTER",  "INFO",    "FORMAT",  "GT")
+tghsus2.vcf <- read_tsv(file = "../../toxo.sorted.dedup.bcf_selected.txt", 
+                       col_names = bcf_colnames) %>% 
+              mutate(GT= ifelse(GT==0, 0, 1)) %>% 
+              mutate(END_POS = POS + 1)
+tghsus2.gr <- makeGRangesFromDataFrame(df = tghsus2.vcf, seqnames.field = "CHROM", start.field = "POS", end.field = "END_POS", keep.extra.columns = T) 
+
+pdf(file = "../../SNP_distribution_ME49.pdf", width = 15, height = 8)
+  pp <- getDefaultPlotParams(plot.type=1)
+  
+  # Load Sc genome
+  kp <- karyoploteR::plotKaryotype(genome = tgrt1.gr, chromosomes="all", plot.type=1, plot.params = pp)
+  
+  # Add chromosome coords
+  kpAddBaseNumbers(kp, tick.dist = 1000000, units  = "Mb", 
+                   tick.len = 20, tick.col="black", cex=1,
+                   )
+  
+  kpPlotRegions(kp, data=subset(tghsus2.gr, FORMAT == "GT"), col = "grey", r0=0, r1=0.25, avoid.overlapping=F)
+  kpPlotRegions(kp, data=subset(tghsus2.gr, FORMAT == "GT:PL"), col = "red", r0=0.26, r1=0.5, avoid.overlapping=F)
+dev.off()
+```
+```{r}
+# merge all_samples.df with tghsus2.vcf
+all_samples.df <- read.delim(file = "../../paper_strains.txt", header = T, row.names = NULL)
+
+all_samples.df$ID <- paste(all_samples.df$CHROMOSOME, all_samples.df$POS, sep = "_")
+tghsus2.vcf$ID <- paste(tghsus2.vcf$CHROM, tghsus2.vcf$POS, sep = "_")
+
+snp.merge <- merge(all_samples.df, tghsus2.vcf, by = "ID") %>% select(-c("CHROM","POS.y","ID","REF","QUAL","FILTER","INFO","FORMAT","GT","END_POS")) %>% rename("ALT"="TgHsUS2")
+
+  write.table(snp.merge, file = "../../snp.merge.txt", sep = "\t", row.names = F, col.names = T, quote = F)
+```
+
+```{r}
+sessionInfo()
+```
+
